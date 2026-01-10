@@ -129,22 +129,28 @@ Configure one or more platforms below. You can use all three simultaneously!
 
 ---
 
-### 5. Set Secrets
+### 5. Set Environment Variables
 
 Configure at least one webhook URL. You can add all three to send notifications to multiple platforms!
 
-#### Option A: Via Dashboard
+> **💡 Tip**: When deploying via the "Deploy to Cloudflare Workers" button or dashboard, these environment variables will be automatically shown in the deployment interface for easy configuration.
 
-1. Go to [Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages)
-2. Select your deployed worker
-3. Go to **Settings** → **Variables and Secrets**
-4. Add (at least one webhook required):
+#### Option A: Via Dashboard (Deployment Interface)
+
+When deploying through the dashboard, you'll be prompted to fill in:
    - `SLACK_WEBHOOK_URL` → Your Slack webhook URL (optional)
    - `LARK_WEBHOOK_URL` → Your Lark/Feishu webhook URL (optional)
    - `DISCORD_WEBHOOK_URL` → Your Discord webhook URL (optional)
    - `CLOUDFLARE_API_TOKEN` → Your API token (required)
 
-#### Option B: Via CLI
+#### Option B: Via Dashboard (After Deployment)
+
+1. Go to [Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages)
+2. Select your deployed worker
+3. Go to **Settings** → **Variables and Secrets**
+4. Update the environment variables as needed
+
+#### Option C: Via CLI (For Advanced Users)
 
 ```bash
 # Add at least one webhook
