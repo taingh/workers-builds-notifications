@@ -120,7 +120,7 @@ function buildMetadataContent(event: CloudflareEvent): string {
 		parts.push(`**Author:** ${authorName}`);
 	}
 
-	return parts.join("\\n");
+	return parts.join("\n");
 }
 
 // =============================================================================
