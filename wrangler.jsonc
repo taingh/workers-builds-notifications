@@ -15,18 +15,6 @@
 		"directory": "./public"
 	},
 	/**
-	 * Environment Variables
-	 *
-	 * These variables should be configured as secrets in your Cloudflare dashboard
-	 * or via wrangler CLI for security. At least one webhook URL is required.
-	 */
-	"vars": {
-		"SLACK_WEBHOOK_URL": "",
-		"LARK_WEBHOOK_URL": "",
-		"DISCORD_WEBHOOK_URL": "",
-		"CLOUDFLARE_API_TOKEN": ""
-	},
-	/**
 	 * Queue Consumer Configuration
 	 *
 	 * IMPORTANT: Update the "queue" value below to match your queue name.
