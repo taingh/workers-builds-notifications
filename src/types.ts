@@ -12,6 +12,9 @@ export interface Env {
 	LARK_WEBHOOK_URL?: string;
 	DISCORD_WEBHOOK_URL?: string;
 
+	// Lark failure @all behavior: "production" (default) | "all" | "none"
+	LARK_FAIL_MENTION?: string;
+
 	// Cloudflare API token for fetching build details
 	CLOUDFLARE_API_TOKEN: string;
 }

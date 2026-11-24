@@ -16,6 +16,7 @@ export interface NotificationData {
 	previewUrl: string | null;
 	liveUrl: string | null;
 	logs: string[];
+	larkFailMention?: string;
 }
 
 /**

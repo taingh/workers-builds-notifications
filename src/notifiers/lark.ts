@@ -230,15 +230,36 @@ function buildSuccessMessage(
 	};
 }
 
+/**
+ * Determines whether a failed Lark build card should mention @all.
+ * Defaults to "production" (main/master/production/prod or missing branch).
+ */
+export function shouldMentionAllOnFailure(
+	mode: string | undefined,
+	branch: string | undefined,
+): boolean {
+	const normalized = mode?.trim().toLowerCase();
+	if (normalized === "all") return true;
+	if (normalized === "none" || normalized === "off") return false;
+	return isProductionBranch(branch);
+}
+
 function buildFailureMessage(
 	event: CloudflareEvent,
 	logs: string[],
+	larkFailMention?: string,
 ): LarkPayload {
 	const dashUrl = getDashboardUrl(event);
 	const error = extractBuildError(logs);
+	const mentionPrefix = shouldMentionAllOnFailure(
+		larkFailMention,
+		event.payload?.buildTriggerMetadata?.branch,
+	)
+		? "<at id=all></at> "
+		: "";
 
 	const elements: LarkCardElement[] = [
-		buildMarkdownElement(buildWorkerHeader(event)),
+		buildMarkdownElement(`${mentionPrefix}${buildWorkerHeader(event)}`),
 	];
 
 	appendMetadataAndMessage(elements, event);
@@ -333,7 +354,7 @@ export class LarkNotifier implements Notifier {
 		}
 
 		if (status.isFailed) {
-			return buildFailureMessage(event, logs);
+			return buildFailureMessage(event, logs, data.larkFailMention);
 		}
 
 		if (status.isCancelled) {
