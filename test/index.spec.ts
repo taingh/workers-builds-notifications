@@ -784,6 +784,8 @@ describe("Workers Builds Notifications", () => {
 			expect(larkText).toContain("Fix bug in authentication");
 			expect(larkText).toContain("1m 18s");
 			expect(larkText).toContain("Push");
+			expect(larkText).not.toContain("`main`");
+			expect(larkText).not.toContain("`1m 18s`");
 			const larkActions = larkPayloads[0].card.elements.find(
 				(e: any) => e.tag === "action",
 			);

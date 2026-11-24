@@ -109,7 +109,7 @@ function buildWorkerHeader(event: CloudflareEvent): string {
 	if (repo) {
 		parts.push(repo.url ? `[${repo.name}](${repo.url})` : repo.name);
 		if (repo.rootDirectory) {
-			parts.push(`\`${repo.rootDirectory}\``);
+			parts.push(repo.rootDirectory);
 		}
 	}
 
@@ -125,7 +125,7 @@ function buildMetadataContent(event: CloudflareEvent): string {
 	const parts: string[] = [];
 
 	if (meta?.branch) {
-		parts.push(`**Branch:** \`${meta.branch}\``);
+		parts.push(`**Branch:** ${meta.branch}`);
 	}
 
 	if (meta?.commitHash) {
@@ -133,7 +133,7 @@ function buildMetadataContent(event: CloudflareEvent): string {
 		if (commitUrl) {
 			parts.push(`**Commit:** [${commitText}](${commitUrl})`);
 		} else {
-			parts.push(`**Commit:** \`${commitText}\``);
+			parts.push(`**Commit:** ${commitText}`);
 		}
 	}
 
@@ -144,7 +144,7 @@ function buildMetadataContent(event: CloudflareEvent): string {
 
 	const duration = formatDuration(event);
 	if (duration) {
-		parts.push(`**Duration:** \`${duration}\``);
+		parts.push(`**Duration:** ${duration}`);
 	}
 
 	const trigger = formatTriggerSource(meta?.buildTriggerSource);
