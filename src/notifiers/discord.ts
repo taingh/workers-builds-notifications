@@ -13,6 +13,10 @@ import {
 	getCommitUrl,
 	getDashboardUrl,
 	extractBuildError,
+	getRepoInfo,
+	formatCommitMessage,
+	formatDuration,
+	formatTriggerSource,
 } from "../helpers";
 
 // =============================================================================
@@ -55,6 +59,24 @@ const COLORS = {
 // =============================================================================
 
 /**
+ * Builds embed description with worker name, repository, and optional subdirectory.
+ */
+function buildDescription(event: CloudflareEvent): string {
+	const workerName = event.source?.workerName || "Worker";
+	const repo = getRepoInfo(event);
+	const parts = [`**${workerName}**`];
+
+	if (repo) {
+		parts.push(repo.url ? `[${repo.name}](${repo.url})` : repo.name);
+		if (repo.rootDirectory) {
+			parts.push(`\`${repo.rootDirectory}\``);
+		}
+	}
+
+	return parts.join(" · ");
+}
+
+/**
  * Builds embed fields from event metadata.
  */
 function buildMetadataFields(event: CloudflareEvent): DiscordEmbedField[] {
@@ -91,6 +113,33 @@ function buildMetadataFields(event: CloudflareEvent): DiscordEmbedField[] {
 		});
 	}
 
+	const duration = formatDuration(event);
+	if (duration) {
+		fields.push({
+			name: "Duration",
+			value: `\`${duration}\``,
+			inline: true,
+		});
+	}
+
+	const trigger = formatTriggerSource(meta?.buildTriggerSource);
+	if (trigger) {
+		fields.push({
+			name: "Trigger",
+			value: trigger,
+			inline: true,
+		});
+	}
+
+	const commitMessage = formatCommitMessage(meta?.commitMessage);
+	if (commitMessage) {
+		fields.push({
+			name: "Commit Message",
+			value: commitMessage,
+			inline: false,
+		});
+	}
+
 	return fields;
 }
 
@@ -104,7 +153,6 @@ function buildSuccessMessage(
 	previewUrl: string | null,
 	liveUrl: string | null,
 ): DiscordPayload {
-	const workerName = event.source?.workerName || "Worker";
 	const dashUrl = getDashboardUrl(event);
 
 	const title = isProduction ? "Production Deploy" : "Preview Deploy";
@@ -112,24 +160,27 @@ function buildSuccessMessage(
 
 	const fields = buildMetadataFields(event);
 
-	// Add URL field if available
+	const links: string[] = [];
 	if (isProduction && liveUrl) {
-		fields.push({
-			name: "Worker URL",
-			value: `[View Worker](${liveUrl})`,
-			inline: false,
-		});
+		links.push(`[View Worker](${liveUrl})`);
 	} else if (!isProduction && previewUrl) {
+		links.push(`[View Preview](${previewUrl})`);
+	}
+	if (dashUrl) {
+		links.push(`[View Build](${dashUrl})`);
+	}
+
+	if (links.length > 0) {
 		fields.push({
-			name: "Preview URL",
-			value: `[View Preview](${previewUrl})`,
+			name: "Links",
+			value: links.join(" · "),
 			inline: false,
 		});
 	}
 
 	const embed: DiscordEmbed = {
 		title: `✅ ${title}`,
-		description: `**${workerName}**`,
+		description: buildDescription(event),
 		color: COLORS.SUCCESS,
 		fields,
 		timestamp: event.payload.stoppedAt || event.metadata.eventTimestamp,
@@ -143,7 +194,6 @@ function buildFailureMessage(
 	event: CloudflareEvent,
 	logs: string[],
 ): DiscordPayload {
-	const workerName = event.source?.workerName || "Worker";
 	const dashUrl = getDashboardUrl(event);
 	const error = extractBuildError(logs);
 
@@ -166,7 +216,7 @@ function buildFailureMessage(
 
 	const embed: DiscordEmbed = {
 		title: "❌ Build Failed",
-		description: `**${workerName}**`,
+		description: buildDescription(event),
 		color: COLORS.FAILURE,
 		fields,
 		timestamp: event.payload.stoppedAt || event.metadata.eventTimestamp,
@@ -176,7 +226,6 @@ function buildFailureMessage(
 }
 
 function buildCancelledMessage(event: CloudflareEvent): DiscordPayload {
-	const workerName = event.source?.workerName || "Worker";
 	const dashUrl = getDashboardUrl(event);
 
 	const fields = buildMetadataFields(event);
@@ -191,7 +240,7 @@ function buildCancelledMessage(event: CloudflareEvent): DiscordPayload {
 
 	const embed: DiscordEmbed = {
 		title: "⚠️ Build Cancelled",
-		description: `**${workerName}**`,
+		description: buildDescription(event),
 		color: COLORS.CANCELLED,
 		fields,
 		timestamp: event.payload.stoppedAt || event.metadata.eventTimestamp,
