@@ -12,6 +12,10 @@ import {
 	getCommitUrl,
 	getDashboardUrl,
 	extractBuildError,
+	getRepoInfo,
+	formatCommitMessage,
+	formatDuration,
+	formatTriggerSource,
 } from "../helpers";
 
 // =============================================================================
@@ -95,6 +99,24 @@ function buildButton(
 }
 
 /**
+ * Builds the worker and repository header line.
+ */
+function buildWorkerHeader(event: CloudflareEvent): string {
+	const workerName = event.source?.workerName || "Worker";
+	const repo = getRepoInfo(event);
+	const parts = [`**${workerName}**`];
+
+	if (repo) {
+		parts.push(repo.url ? `[${repo.name}](${repo.url})` : repo.name);
+		if (repo.rootDirectory) {
+			parts.push(`\`${repo.rootDirectory}\``);
+		}
+	}
+
+	return parts.join(" · ");
+}
+
+/**
  * Builds metadata fields from event.
  */
 function buildMetadataContent(event: CloudflareEvent): string {
@@ -120,7 +142,40 @@ function buildMetadataContent(event: CloudflareEvent): string {
 		parts.push(`**Author:** ${authorName}`);
 	}
 
+	const duration = formatDuration(event);
+	if (duration) {
+		parts.push(`**Duration:** \`${duration}\``);
+	}
+
+	const trigger = formatTriggerSource(meta?.buildTriggerSource);
+	if (trigger) {
+		parts.push(`**Trigger:** ${trigger}`);
+	}
+
 	return parts.join("\n");
+}
+
+/**
+ * Appends metadata and commit message sections to card elements.
+ */
+function appendMetadataAndMessage(
+	elements: LarkCardElement[],
+	event: CloudflareEvent,
+): void {
+	const metadataContent = buildMetadataContent(event);
+	if (metadataContent) {
+		elements.push(buildDivider(), buildMarkdownElement(metadataContent));
+	}
+
+	const commitMessage = formatCommitMessage(
+		event.payload?.buildTriggerMetadata?.commitMessage,
+	);
+	if (commitMessage) {
+		elements.push(
+			buildDivider(),
+			buildMarkdownElement(`**Message:** ${commitMessage}`),
+		);
+	}
 }
 
 // =============================================================================
@@ -133,33 +188,30 @@ function buildSuccessMessage(
 	previewUrl: string | null,
 	liveUrl: string | null,
 ): LarkPayload {
-	const workerName = event.source?.workerName || "Worker";
 	const dashUrl = getDashboardUrl(event);
 
 	const title = isProduction ? "Production Deploy" : "Preview Deploy";
-	const buttonText = isProduction
-		? liveUrl
-			? "View Worker"
-			: "View Build"
-		: previewUrl
-			? "View Preview"
-			: "View Build";
-	const buttonUrl = isProduction ? liveUrl || dashUrl : previewUrl || dashUrl;
+	const targetUrl = isProduction ? liveUrl : previewUrl;
+	const primaryText = isProduction ? "View Worker" : "View Preview";
 
 	const elements: LarkCardElement[] = [
-		buildMarkdownElement(`**${workerName}**`),
+		buildMarkdownElement(buildWorkerHeader(event)),
 	];
 
-	const metadataContent = buildMetadataContent(event);
-	if (metadataContent) {
-		elements.push(buildDivider(), buildMarkdownElement(metadataContent));
+	appendMetadataAndMessage(elements, event);
+
+	const buttons: LarkCardElement[] = [];
+	if (targetUrl) {
+		buttons.push(buildButton(primaryText, targetUrl, "primary"));
+	}
+	if (dashUrl) {
+		buttons.push(
+			buildButton("View Build", dashUrl, targetUrl ? "default" : "primary"),
+		);
 	}
 
-	if (buttonUrl) {
-		elements.push(
-			buildDivider(),
-			buildAction([buildButton(buttonText, buttonUrl, "primary")]),
-		);
+	if (buttons.length > 0) {
+		elements.push(buildDivider(), buildAction(buttons));
 	}
 
 	return {
@@ -182,18 +234,14 @@ function buildFailureMessage(
 	event: CloudflareEvent,
 	logs: string[],
 ): LarkPayload {
-	const workerName = event.source?.workerName || "Worker";
 	const dashUrl = getDashboardUrl(event);
 	const error = extractBuildError(logs);
 
 	const elements: LarkCardElement[] = [
-		buildMarkdownElement(`**${workerName}**`),
+		buildMarkdownElement(buildWorkerHeader(event)),
 	];
 
-	const metadataContent = buildMetadataContent(event);
-	if (metadataContent) {
-		elements.push(buildDivider(), buildMarkdownElement(metadataContent));
-	}
+	appendMetadataAndMessage(elements, event);
 
 	// Error message
 	elements.push(
@@ -225,17 +273,13 @@ function buildFailureMessage(
 }
 
 function buildCancelledMessage(event: CloudflareEvent): LarkPayload {
-	const workerName = event.source?.workerName || "Worker";
 	const dashUrl = getDashboardUrl(event);
 
 	const elements: LarkCardElement[] = [
-		buildMarkdownElement(`**${workerName}**`),
+		buildMarkdownElement(buildWorkerHeader(event)),
 	];
 
-	const metadataContent = buildMetadataContent(event);
-	if (metadataContent) {
-		elements.push(buildDivider(), buildMarkdownElement(metadataContent));
-	}
+	appendMetadataAndMessage(elements, event);
 
 	if (dashUrl) {
 		elements.push(

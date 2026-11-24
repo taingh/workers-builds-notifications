@@ -1,7 +1,13 @@
 import { env, createMessageBatch } from "cloudflare:test";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import worker, { type CloudflareEvent } from "../src/index";
-import { extractBuildError } from "../src/helpers";
+import {
+	extractBuildError,
+	formatCommitMessage,
+	formatDuration,
+	formatTriggerSource,
+	getRepoInfo,
+} from "../src/helpers";
 
 // =============================================================================
 // UNIT TESTS: Helper Functions
@@ -32,6 +38,121 @@ describe("Helper Functions", () => {
 				"✘ [ERROR] Actual error here",
 			];
 			expect(extractBuildError(logs)).toContain("Actual error here");
+		});
+	});
+
+	describe("formatCommitMessage", () => {
+		it("should extract first non-empty line and sanitize backticks", () => {
+			expect(
+				formatCommitMessage("\n  feat: handle `foo` case\n\nBody details here"),
+			).toBe("feat: handle 'foo' case");
+		});
+
+		it("should truncate long messages", () => {
+			const long = "a".repeat(150);
+			const formatted = formatCommitMessage(long, 120);
+			expect(formatted).toBe(`${"a".repeat(120)}...`);
+		});
+
+		it("should return null for empty or whitespace-only messages", () => {
+			expect(formatCommitMessage(undefined)).toBeNull();
+			expect(formatCommitMessage("   \n  ")).toBeNull();
+		});
+	});
+
+	describe("formatDuration", () => {
+		it("should format seconds, minutes, and hours", () => {
+			expect(
+				formatDuration(
+					createMockEvent({
+						payload: {
+							buildUuid: "b1",
+							status: "stopped",
+							buildOutcome: "success",
+							createdAt: "2025-05-01T02:48:00.000Z",
+							stoppedAt: "2025-05-01T02:48:42.000Z",
+						},
+					}),
+				),
+			).toBe("42s");
+
+			expect(
+				formatDuration(
+					createMockEvent({
+						payload: {
+							buildUuid: "b2",
+							status: "stopped",
+							buildOutcome: "success",
+							createdAt: "2025-05-01T02:48:57.132Z",
+							stoppedAt: "2025-05-01T02:50:15.132Z",
+						},
+					}),
+				),
+			).toBe("1m 18s");
+		});
+
+		it("should return null when stoppedAt is missing or invalid", () => {
+			expect(
+				formatDuration(
+					createMockEvent({
+						payload: {
+							buildUuid: "b3",
+							status: "running",
+							buildOutcome: null,
+							createdAt: "2025-05-01T02:48:57.132Z",
+						},
+					}),
+				),
+			).toBeNull();
+		});
+	});
+
+	describe("formatTriggerSource", () => {
+		it("should map known trigger sources and format unknown ones", () => {
+			expect(formatTriggerSource("push_event")).toBe("Push");
+			expect(formatTriggerSource("deploy_hook")).toBe("Deploy Hook");
+			expect(formatTriggerSource("manual")).toBe("Manual");
+			expect(formatTriggerSource("custom_event")).toBe("Custom Event");
+			expect(formatTriggerSource(undefined)).toBeNull();
+		});
+	});
+
+	describe("getRepoInfo", () => {
+		it("should extract repo name, url, and non-root directory", () => {
+			const info = getRepoInfo(
+				createMockEvent({
+					payload: {
+						buildUuid: "b1",
+						status: "stopped",
+						buildOutcome: "success",
+						createdAt: "2025-05-01T02:48:57.132Z",
+						buildTriggerMetadata: {
+							buildTriggerSource: "push_event",
+							branch: "main",
+							commitHash: "abc123",
+							commitMessage: "msg",
+							author: "dev@example.com",
+							buildCommand: "npm run build",
+							deployCommand: "npm run deploy",
+							rootDirectory: "/apps/web",
+							repoName: "monorepo",
+							providerAccountName: "taingh",
+							providerType: "github",
+						},
+					},
+				}),
+			);
+
+			expect(info).toEqual({
+				name: "taingh/monorepo",
+				url: "https://github.com/taingh/monorepo",
+				rootDirectory: "apps/web",
+			});
+		});
+
+		it("should return null rootDirectory when set to /", () => {
+			const info = getRepoInfo(createMockEvent());
+			expect(info?.rootDirectory).toBeNull();
 		});
 	});
 });
@@ -638,6 +759,19 @@ describe("Workers Builds Notifications", () => {
 			expect(slackPayloads[0].blocks[0].text.text).toContain(
 				"Production Deploy",
 			);
+			expect(slackPayloads[0].blocks[0].text.text).toContain(
+				"cloudflare/test-worker-repo",
+			);
+			const slackText = JSON.stringify(slackPayloads[0]);
+			expect(slackText).toContain("Fix bug in authentication");
+			expect(slackText).toContain("1m 18s");
+			expect(slackText).toContain("Push");
+			const slackActions = slackPayloads[0].blocks.find(
+				(b: any) => b.type === "actions",
+			);
+			expect(slackActions?.elements).toHaveLength(2);
+			expect(slackActions.elements[0].text.text).toBe("View Worker");
+			expect(slackActions.elements[1].text.text).toBe("View Build");
 
 			// Verify Lark format
 			expect(larkPayloads[0].msg_type).toBe("interactive");
@@ -645,10 +779,40 @@ describe("Workers Builds Notifications", () => {
 			expect(larkPayloads[0].card.header.title.content).toContain(
 				"Production Deploy",
 			);
+			const larkText = JSON.stringify(larkPayloads[0]);
+			expect(larkText).toContain("cloudflare/test-worker-repo");
+			expect(larkText).toContain("Fix bug in authentication");
+			expect(larkText).toContain("1m 18s");
+			expect(larkText).toContain("Push");
+			const larkActions = larkPayloads[0].card.elements.find(
+				(e: any) => e.tag === "action",
+			);
+			expect(larkActions?.actions).toHaveLength(2);
+			expect(larkActions.actions[0].text.content).toBe("View Worker");
+			expect(larkActions.actions[1].text.content).toBe("View Build");
 
 			// Verify Discord format
 			expect(discordPayloads[0].embeds).toBeDefined();
 			expect(discordPayloads[0].embeds[0].title).toContain("Production Deploy");
+			expect(discordPayloads[0].embeds[0].description).toContain(
+				"cloudflare/test-worker-repo",
+			);
+			const discordFields = discordPayloads[0].embeds[0].fields;
+			expect(discordFields).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ name: "Duration", value: "`1m 18s`" }),
+					expect.objectContaining({ name: "Trigger", value: "Push" }),
+					expect.objectContaining({
+						name: "Commit Message",
+						value: "Fix bug in authentication",
+						inline: false,
+					}),
+					expect.objectContaining({
+						name: "Links",
+						value: expect.stringContaining("View Build"),
+					}),
+				]),
+			);
 		});
 
 		it("should work with only Lark configured", async () => {

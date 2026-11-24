@@ -95,6 +95,119 @@ export function getDashboardUrl(event: CloudflareEvent): string | null {
 	return `https://dash.cloudflare.com/${accountId}/workers/services/view/${workerName}/production/builds/${buildUuid}`;
 }
 
+export interface RepoInfo {
+	name: string;
+	url: string | null;
+	rootDirectory: string | null;
+}
+
+/**
+ * Extracts repository display name, URL, and non-root directory path.
+ */
+export function getRepoInfo(event: CloudflareEvent): RepoInfo | null {
+	const meta = event.payload?.buildTriggerMetadata;
+	if (!meta?.repoName) return null;
+
+	const name = meta.providerAccountName
+		? `${meta.providerAccountName}/${meta.repoName}`
+		: meta.repoName;
+
+	let url: string | null = null;
+	if (meta.providerAccountName) {
+		if (meta.providerType === "github") {
+			url = `https://github.com/${meta.providerAccountName}/${meta.repoName}`;
+		} else if (meta.providerType === "gitlab") {
+			url = `https://gitlab.com/${meta.providerAccountName}/${meta.repoName}`;
+		}
+	}
+
+	const normalizedDir = meta.rootDirectory?.trim().replace(/^\/+/, "");
+	const rootDirectory = normalizedDir ? normalizedDir : null;
+
+	return { name, url, rootDirectory };
+}
+
+/**
+ * Formats a git commit message to its first non-empty line,
+ * stripping backticks and truncating overly long subjects.
+ */
+export function formatCommitMessage(
+	message: string | undefined,
+	maxLength = 120,
+): string | null {
+	if (!message) return null;
+
+	const firstLine = message
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.find((line) => line.length > 0);
+
+	if (!firstLine) return null;
+
+	const sanitized = firstLine.replace(/`/g, "'").replace(/\s+/g, " ");
+	return truncate(sanitized, maxLength);
+}
+
+/**
+ * Calculates and formats total build duration from createdAt to stoppedAt.
+ */
+export function formatDuration(event: CloudflareEvent): string | null {
+	const createdAt = event.payload?.createdAt;
+	const stoppedAt = event.payload?.stoppedAt;
+	if (!createdAt || !stoppedAt) return null;
+
+	const startMs = Date.parse(createdAt);
+	const endMs = Date.parse(stoppedAt);
+	if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs < startMs) {
+		return null;
+	}
+
+	const totalSeconds = Math.round((endMs - startMs) / 1000);
+	if (totalSeconds < 60) {
+		return `${totalSeconds}s`;
+	}
+
+	const hours = Math.floor(totalSeconds / 3600);
+	const minutes = Math.floor((totalSeconds % 3600) / 60);
+	const seconds = totalSeconds % 60;
+
+	if (hours > 0) {
+		const parts = [`${hours}h`];
+		if (minutes > 0) parts.push(`${minutes}m`);
+		if (seconds > 0) parts.push(`${seconds}s`);
+		return parts.join(" ");
+	}
+
+	return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+const TRIGGER_SOURCE_LABELS: Record<string, string> = {
+	push_event: "Push",
+	pull_request: "Pull Request",
+	pull_request_event: "Pull Request",
+	deploy_hook: "Deploy Hook",
+	manual: "Manual",
+	manual_trigger: "Manual",
+	api: "API",
+	schedule: "Schedule",
+	scheduled: "Schedule",
+};
+
+/**
+ * Formats a build trigger source into a readable short label.
+ */
+export function formatTriggerSource(source: string | undefined): string | null {
+	const trimmed = source?.trim();
+	if (!trimmed) return null;
+
+	const mapped = TRIGGER_SOURCE_LABELS[trimmed.toLowerCase()];
+	if (mapped) return mapped;
+
+	return trimmed
+		.replace(/_/g, " ")
+		.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 // =============================================================================
 // ERROR EXTRACTION
 // =============================================================================

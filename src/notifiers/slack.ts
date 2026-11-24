@@ -5,6 +5,7 @@
 import type {
 	SectionBlock,
 	ContextBlock,
+	ActionsBlock,
 	KnownBlock,
 	MrkdwnElement,
 	Button,
@@ -19,6 +20,10 @@ import {
 	getCommitUrl,
 	getDashboardUrl,
 	extractBuildError,
+	getRepoInfo,
+	formatCommitMessage,
+	formatDuration,
+	formatTriggerSource,
 } from "../helpers";
 
 // =============================================================================
@@ -66,8 +71,33 @@ function buildContextBlock(elements: MrkdwnElement[]): ContextBlock {
 	return { type: "context", elements };
 }
 
+function escapeMrkdwn(text: string): string {
+	return text
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;");
+}
+
 /**
- * Builds context elements (branch, commit, author) from event metadata.
+ * Builds the worker and repository header line.
+ */
+function buildWorkerHeader(event: CloudflareEvent): string {
+	const workerName = event.source?.workerName || "Worker";
+	const repo = getRepoInfo(event);
+	const parts = [`*${workerName}*`];
+
+	if (repo) {
+		parts.push(repo.url ? `<${repo.url}|${repo.name}>` : repo.name);
+		if (repo.rootDirectory) {
+			parts.push(`\`${repo.rootDirectory}\``);
+		}
+	}
+
+	return parts.join(" · ");
+}
+
+/**
+ * Builds context elements (branch, commit, author, duration, trigger) from event metadata.
  */
 function buildContextElements(event: CloudflareEvent): MrkdwnElement[] {
 	const meta = event.payload?.buildTriggerMetadata;
@@ -94,7 +124,43 @@ function buildContextElements(event: CloudflareEvent): MrkdwnElement[] {
 		elements.push({ type: "mrkdwn", text: `*Author:* ${authorName}` });
 	}
 
+	const duration = formatDuration(event);
+	if (duration) {
+		elements.push({ type: "mrkdwn", text: `*Duration:* \`${duration}\`` });
+	}
+
+	const trigger = formatTriggerSource(meta?.buildTriggerSource);
+	if (trigger) {
+		elements.push({ type: "mrkdwn", text: `*Trigger:* ${trigger}` });
+	}
+
 	return elements;
+}
+
+/**
+ * Appends metadata context and commit message blocks to the payload.
+ */
+function appendMetadataAndMessage(
+	blocks: KnownBlock[],
+	event: CloudflareEvent,
+): void {
+	const contextElements = buildContextElements(event);
+	if (contextElements.length > 0) {
+		blocks.push(buildContextBlock(contextElements));
+	}
+
+	const commitMessage = formatCommitMessage(
+		event.payload?.buildTriggerMetadata?.commitMessage,
+	);
+	if (commitMessage) {
+		blocks.push({
+			type: "section",
+			text: {
+				type: "mrkdwn",
+				text: `*Message:* ${escapeMrkdwn(commitMessage)}`,
+			},
+		});
+	}
 }
 
 // =============================================================================
@@ -107,26 +173,42 @@ function buildSuccessMessage(
 	previewUrl: string | null,
 	liveUrl: string | null,
 ): SlackPayload {
-	const workerName = event.source?.workerName || "Worker";
 	const dashUrl = getDashboardUrl(event);
 
 	const title = isProduction ? "Production Deploy" : "Preview Deploy";
-	const buttonText = isProduction
-		? liveUrl
-			? "View Worker"
-			: "View Build"
-		: previewUrl
-			? "View Preview"
-			: "View Build";
-	const buttonUrl = isProduction ? liveUrl || dashUrl : previewUrl || dashUrl;
+	const targetUrl = isProduction ? liveUrl : previewUrl;
+	const primaryText = isProduction ? "View Worker" : "View Preview";
 
 	const blocks: KnownBlock[] = [
-		buildSectionBlock(`✅  *${title}*\n*${workerName}*`, buttonText, buttonUrl),
+		buildSectionBlock(`✅  *${title}*\n${buildWorkerHeader(event)}`),
 	];
 
-	const contextElements = buildContextElements(event);
-	if (contextElements.length > 0) {
-		blocks.push(buildContextBlock(contextElements));
+	appendMetadataAndMessage(blocks, event);
+
+	const buttons: Button[] = [];
+	if (targetUrl) {
+		buttons.push({
+			type: "button",
+			text: { type: "plain_text", text: primaryText },
+			url: targetUrl,
+			style: "primary",
+		});
+	}
+	if (dashUrl) {
+		buttons.push({
+			type: "button",
+			text: { type: "plain_text", text: "View Build" },
+			url: dashUrl,
+			...(!targetUrl && { style: "primary" }),
+		});
+	}
+
+	if (buttons.length > 0) {
+		const actionsBlock: ActionsBlock = {
+			type: "actions",
+			elements: buttons,
+		};
+		blocks.push(actionsBlock);
 	}
 
 	return { blocks };
@@ -136,23 +218,19 @@ function buildFailureMessage(
 	event: CloudflareEvent,
 	logs: string[],
 ): SlackPayload {
-	const workerName = event.source?.workerName || "Worker";
 	const dashUrl = getDashboardUrl(event);
 	const error = extractBuildError(logs);
 
 	const blocks: KnownBlock[] = [
 		buildSectionBlock(
-			`❌  *Build Failed*\n*${workerName}*`,
+			`❌  *Build Failed*\n${buildWorkerHeader(event)}`,
 			dashUrl ? "View Logs" : undefined,
 			dashUrl,
 			"danger",
 		),
 	];
 
-	const contextElements = buildContextElements(event);
-	if (contextElements.length > 0) {
-		blocks.push(buildContextBlock(contextElements));
-	}
+	appendMetadataAndMessage(blocks, event);
 
 	// Error message in code block
 	blocks.push({
@@ -164,21 +242,17 @@ function buildFailureMessage(
 }
 
 function buildCancelledMessage(event: CloudflareEvent): SlackPayload {
-	const workerName = event.source?.workerName || "Worker";
 	const dashUrl = getDashboardUrl(event);
 
 	const blocks: KnownBlock[] = [
 		buildSectionBlock(
-			`⚠️  *Build Cancelled*\n*${workerName}*`,
+			`⚠️  *Build Cancelled*\n${buildWorkerHeader(event)}`,
 			dashUrl ? "View Build" : undefined,
 			dashUrl,
 		),
 	];
 
-	const contextElements = buildContextElements(event);
-	if (contextElements.length > 0) {
-		blocks.push(buildContextBlock(contextElements));
-	}
+	appendMetadataAndMessage(blocks, event);
 
 	return { blocks };
 }
