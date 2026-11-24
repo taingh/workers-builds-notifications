@@ -8,6 +8,7 @@ import {
 	formatTriggerSource,
 	getRepoInfo,
 } from "../src/helpers";
+import { shouldMentionAllOnFailure } from "../src/notifiers/lark";
 
 // =============================================================================
 // UNIT TESTS: Helper Functions
@@ -153,6 +154,22 @@ describe("Helper Functions", () => {
 		it("should return null rootDirectory when set to /", () => {
 			const info = getRepoInfo(createMockEvent());
 			expect(info?.rootDirectory).toBeNull();
+		});
+	});
+
+	describe("shouldMentionAllOnFailure", () => {
+		it("should default to production branches only", () => {
+			expect(shouldMentionAllOnFailure(undefined, "main")).toBe(true);
+			expect(shouldMentionAllOnFailure(undefined, "production")).toBe(true);
+			expect(shouldMentionAllOnFailure(undefined, "feature/test")).toBe(false);
+		});
+
+		it("should respect all and none/off modes", () => {
+			expect(shouldMentionAllOnFailure("all", "feature/test")).toBe(true);
+			expect(shouldMentionAllOnFailure("none", "main")).toBe(false);
+			expect(shouldMentionAllOnFailure("off", "main")).toBe(false);
+			expect(shouldMentionAllOnFailure("unknown", "main")).toBe(true);
+			expect(shouldMentionAllOnFailure("unknown", "dev")).toBe(false);
 		});
 	});
 });
@@ -848,6 +865,107 @@ describe("Workers Builds Notifications", () => {
 			expect(slackPayloads).toHaveLength(0);
 			expect(larkPayloads).toHaveLength(1);
 			expect(discordPayloads).toHaveLength(0);
+			expect(JSON.stringify(larkPayloads[0])).not.toContain("<at id=all>");
+		});
+
+		it("should mention @all on Lark only for production failures by default and respect LARK_FAIL_MENTION", async () => {
+			mockFetch((url) => {
+				if (url.includes("/logs")) {
+					return new Response(
+						JSON.stringify({
+							result: { lines: [[1, "Error: Build failed"]], truncated: false },
+						}),
+					);
+				}
+				if (url.includes("open.feishu.cn")) {
+					return new Response(JSON.stringify({ code: 0, msg: "success" }));
+				}
+				return new Response("Not found", { status: 404 });
+			});
+
+			const larkEnv = {
+				...env,
+				SLACK_WEBHOOK_URL: "",
+				LARK_WEBHOOK_URL: "https://open.feishu.cn/open-apis/bot/v2/hook/test",
+			};
+
+			const prodFailEvent = createMockEvent({
+				type: "cf.workersBuilds.worker.build.failed",
+				payload: {
+					buildUuid: "b-prod-fail",
+					status: "stopped",
+					buildOutcome: "failure",
+					createdAt: "2025-05-01T02:48:57.132Z",
+					buildTriggerMetadata: {
+						buildTriggerSource: "push_event",
+						branch: "main",
+						commitHash: "abc123def456",
+						commitMessage: "Break prod",
+						author: "dev@example.com",
+						buildCommand: "npm run build",
+						deployCommand: "npm run deploy",
+						rootDirectory: "/",
+						repoName: "test-worker-repo",
+						providerAccountName: "taingh",
+						providerType: "github",
+					},
+				},
+			});
+
+			const featureFailEvent = createMockEvent({
+				type: "cf.workersBuilds.worker.build.failed",
+				payload: {
+					buildUuid: "b-feat-fail",
+					status: "stopped",
+					buildOutcome: "failure",
+					createdAt: "2025-05-01T02:48:57.132Z",
+					buildTriggerMetadata: {
+						buildTriggerSource: "push_event",
+						branch: "feature/test",
+						commitHash: "abc123def456",
+						commitMessage: "Break feature",
+						author: "dev@example.com",
+						buildCommand: "npm run build",
+						deployCommand: "npm run deploy",
+						rootDirectory: "/",
+						repoName: "test-worker-repo",
+						providerAccountName: "taingh",
+						providerType: "github",
+					},
+				},
+			});
+
+			// 1. Default (production): prod fail mentions @all, feature fail does not
+			await worker.queue(
+				createMessageBatch("builds-event-subscriptions", [
+					createQueueMessage(prodFailEvent),
+					createQueueMessage(featureFailEvent),
+				]),
+				larkEnv as typeof env,
+			);
+			expect(larkPayloads).toHaveLength(2);
+			expect(JSON.stringify(larkPayloads[0])).toContain("<at id=all></at>");
+			expect(JSON.stringify(larkPayloads[1])).not.toContain("<at id=all>");
+
+			// 2. LARK_FAIL_MENTION="all": feature fail also mentions @all
+			larkPayloads = [];
+			await worker.queue(
+				createMessageBatch("builds-event-subscriptions", [
+					createQueueMessage(featureFailEvent),
+				]),
+				{ ...larkEnv, LARK_FAIL_MENTION: "all" } as typeof env,
+			);
+			expect(JSON.stringify(larkPayloads[0])).toContain("<at id=all></at>");
+
+			// 3. LARK_FAIL_MENTION="none": prod fail does not mention @all
+			larkPayloads = [];
+			await worker.queue(
+				createMessageBatch("builds-event-subscriptions", [
+					createQueueMessage(prodFailEvent),
+				]),
+				{ ...larkEnv, LARK_FAIL_MENTION: "none" } as typeof env,
+			);
+			expect(JSON.stringify(larkPayloads[0])).not.toContain("<at id=all>");
 		});
 
 		it("should work with only Discord configured", async () => {

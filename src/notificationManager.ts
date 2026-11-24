@@ -48,7 +48,10 @@ export async function sendNotifications(
 
 		const promise = (async () => {
 			try {
-				const payload = notifier.buildPayload(data);
+				const payload = notifier.buildPayload({
+					...data,
+					larkFailMention: data.larkFailMention ?? env.LARK_FAIL_MENTION,
+				});
 				await notifier.send(webhookUrl, payload);
 				// eslint-disable-next-line no-console
 				console.log(`✓ Sent notification to ${notifier.name}`);
